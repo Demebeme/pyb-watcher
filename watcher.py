@@ -4,7 +4,17 @@ Runs every ~5 minutes. Deterministic detection, templated JARVIS-style alerts,
 edge-tts voice notes. State persists in the game's Open Cloud datastore.
 The hourly cloud routine still owns the guaranteed daily report.
 """
-import json, os, random, re, subprocess, sys, tempfile, html
+import json, os, random, re, shutil, subprocess, sys, tempfile, html
+
+def ffmpeg_path():
+    p = shutil.which("ffmpeg")
+    if p:
+        return p
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
 from datetime import datetime, timedelta, timezone
 
 RBX_KEY = os.environ["ROBLOX_KEY"].strip()
@@ -96,10 +106,17 @@ def tg_voice(text):
                            capture_output=True, text=True, timeout=180)
         if r.returncode != 0 or not os.path.exists(mp3):
             log(f"tts failed: {(r.stderr or '')[:200]}"); return
-        c = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", mp3,
-                            "-c:a", "libopus", "-b:a", "48k", ogg],
-                           capture_output=True, text=True, timeout=120)
-        target, field, url = (ogg, "voice", "sendVoice") if c.returncode == 0 else (mp3, "audio", "sendAudio")
+        have_ogg = False
+        fp = ffmpeg_path()
+        if fp:
+            try:
+                c = subprocess.run([fp, "-y", "-loglevel", "error", "-i", mp3,
+                                    "-c:a", "libopus", "-b:a", "48k", ogg],
+                                   capture_output=True, text=True, timeout=120)
+                have_ogg = c.returncode == 0 and os.path.exists(ogg)
+            except (FileNotFoundError, OSError):
+                have_ogg = False  # mp3 via sendAudio still delivers
+        target, field, url = (ogg, "voice", "sendVoice") if have_ogg else (mp3, "audio", "sendAudio")
         with open(target, "rb") as f:
             requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/{url}",
                           data={"chat_id": CHAT_ID}, files={field: f}, timeout=120)
