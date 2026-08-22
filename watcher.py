@@ -278,6 +278,27 @@ def main():
     elif not camp_bad:
         state["campaignNote"] = "SERVING"
 
+    # ---- daily rollup fast-poke: fire the report routine the moment yesterday lands ----
+    # start is cache-busted (day-before 23:MM varies per run); end stays an exact boundary
+    dau_start = (NOW - timedelta(days=2)).strftime("%Y-%m-%d") + NOW.strftime("T23:%M:00Z")
+    dau = series(metric("DailyActiveUsers", dau_start, f"{TODAY}T00:00:00Z"))
+    if dau.get(YDAY) is not None and state.get("pokedForDay") != YDAY:
+        cloud = ds_get("state") or {}
+        if cloud.get("lastRolledDay") != YDAY:
+            if os.environ.get("GITHUB_ACTIONS"):
+                try:
+                    open("rollup-marker.txt", "w").write(f"{YDAY} landed at {NOW.isoformat()}\n")
+                    for cmd in (["git", "config", "user.name", "pyb-watcher"],
+                                ["git", "config", "user.email", "watcher@users.noreply.github.com"],
+                                ["git", "add", "rollup-marker.txt"],
+                                ["git", "commit", "-m", f"rollup {YDAY} landed"],
+                                ["git", "push"]):
+                        subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                    log(f"rollup {YDAY} landed, poked repo to fire the daily report")
+                except Exception as e:
+                    log(f"poke failed: {e!r}")
+            state["pokedForDay"] = YDAY
+
     # ---- voice the daily report if a new one is stored ----
     lb = ds_get("lastBriefing") or {}
     if lb.get("text") and lb.get("sentAt") and lb["sentAt"] != state.get("voicedSentAt"):
